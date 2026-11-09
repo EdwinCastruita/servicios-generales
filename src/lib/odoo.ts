@@ -89,6 +89,27 @@ export async function login(username: string, password: string) {
   }
 }
 
+/**
+ * Inicia sesión con "Sign in with Google" (Google Identity Services).
+ * `credential` es el ID token (JWT) que Google entrega al navegador tras
+ * el login; lo valida `wispi_servicios_generales_api` (sin password).
+ */
+export async function loginWithGoogle(credential: string) {
+  try {
+    const data = await apiCall<ApiResponse & { session_id: string }>(
+      '/api/servicios_generales/login/google',
+      { credential },
+    );
+    if (!data.session_id) throw new OdooError('Odoo no devolvió una sesión');
+    return data.session_id;
+  } catch (e) {
+    if (e instanceof OdooError && e.code === 401) {
+      throw new OdooError('No existe una cuenta de Odoo asociada a ese correo de Google.');
+    }
+    throw e;
+  }
+}
+
 export async function getSessionInfo(sessionId: string): Promise<SessionInfo> {
   const data = await apiCall<ApiResponse & { user: { id: number; name: string; email: string } }>(
     '/api/servicios_generales/me',

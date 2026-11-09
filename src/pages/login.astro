@@ -2,8 +2,14 @@
 import Layout from '../layouts/Layout.astro';
 import { login, OdooError } from '../lib/odoo';
 import { SESSION_COOKIE } from '../middleware';
+import { GOOGLE_CLIENT_ID } from 'astro:env/client';
 
-let error = Astro.url.searchParams.has('expired') ? 'Tu sesión expiró. Inicia sesión de nuevo.' : '';
+const errorParam = Astro.url.searchParams.get('error');
+let error = Astro.url.searchParams.has('expired')
+  ? 'Tu sesión expiró. Inicia sesión de nuevo.'
+  : errorParam === 'google_csrf'
+    ? 'No se pudo verificar la solicitud de Google. Intenta de nuevo.'
+    : errorParam || '';
 let username = '';
 
 if (Astro.request.method === 'POST') {
@@ -37,28 +43,56 @@ if (Astro.request.method === 'POST') {
 
 <Layout title="Iniciar sesión">
   <main>
-    <form method="POST" class="card">
-      <header>
-        <img src="/wispi.jpeg" alt="Wispi" class="logo" />
-        <h1>Servicios Generales</h1>
-        <p>Inicia sesión con tu usuario de Odoo.</p>
-      </header>
+    <div class="card">
+      <form method="POST">
+        <header>
+          <img src="/wispi.jpeg" alt="Wispi" class="logo" />
+          <h1>Servicios Generales</h1>
+          <p>Inicia sesión con tu usuario de Odoo.</p>
+        </header>
 
-      <label>
-        Usuario / correo
-        <input type="text" name="username" value={username} required autocomplete="username" autofocus />
-      </label>
-      <label>
-        Contraseña
-        <input type="password" name="password" required autocomplete="current-password" />
-      </label>
+        <label>
+          Usuario / correo
+          <input type="text" name="username" value={username} required autocomplete="username" autofocus />
+        </label>
+        <label>
+          Contraseña
+          <input type="password" name="password" required autocomplete="current-password" />
+        </label>
 
-      {error && <p class="error" role="alert">{error}</p>}
+        {error && <p class="error" role="alert">{error}</p>}
 
-      <button type="submit">Entrar</button>
-    </form>
+        <button type="submit">Entrar</button>
+      </form>
+
+      {GOOGLE_CLIENT_ID && (
+        <>
+          <div class="divider"><span>o</span></div>
+          <div
+            id="g_id_onload"
+            data-client_id={GOOGLE_CLIENT_ID}
+            data-login_uri="/api/auth/google"
+            data-ux_mode="redirect"
+            data-context="signin"
+          />
+          <div class="g_id_signin_wrap">
+            <div
+              class="g_id_signin"
+              data-type="standard"
+              data-shape="pill"
+              data-theme="filled_black"
+              data-size="large"
+              data-width="328"
+              data-logo_alignment="center"
+            />
+          </div>
+        </>
+      )}
+    </div>
   </main>
 </Layout>
+
+{GOOGLE_CLIENT_ID && <script is:inline src="https://accounts.google.com/gsi/client" async defer></script>}
 
 <style>
   main {
@@ -70,6 +104,11 @@ if (Astro.request.method === 'POST') {
   .card {
     width: 100%;
     max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .card form {
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -97,5 +136,26 @@ if (Astro.request.method === 'POST') {
   }
   button {
     width: 100%;
+  }
+  .divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .g_id_signin_wrap {
+    display: flex;
+    justify-content: center;
   }
 </style>
