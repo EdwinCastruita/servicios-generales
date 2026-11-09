@@ -1,0 +1,101 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { login, OdooError } from '../lib/odoo';
+import { SESSION_COOKIE } from '../middleware';
+
+let error = Astro.url.searchParams.has('expired') ? 'Tu sesión expiró. Inicia sesión de nuevo.' : '';
+let username = '';
+
+if (Astro.request.method === 'POST') {
+  const data = await Astro.request.formData();
+  username = String(data.get('username') ?? '').trim();
+  const password = String(data.get('password') ?? '');
+
+  if (!username || !password) {
+    error = 'Ingresa tu usuario y contraseña.';
+  } else {
+    try {
+      const sessionId = await login(username, password);
+      Astro.cookies.set(SESSION_COOKIE, sessionId, {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: Astro.url.protocol === 'https:',
+        maxAge: 60 * 60 * 8,
+      });
+      return Astro.redirect('/');
+    } catch (e) {
+      error =
+        e instanceof OdooError && !e.code
+          ? e.message
+          : 'No se pudo iniciar sesión en Odoo. Verifica tus datos.';
+      console.error('Login Odoo:', e);
+    }
+  }
+}
+---
+
+<Layout title="Iniciar sesión">
+  <main>
+    <form method="POST" class="card">
+      <header>
+        <img src="/wispi.jpeg" alt="Wispi" class="logo" />
+        <h1>Servicios Generales</h1>
+        <p>Inicia sesión con tu usuario de Odoo.</p>
+      </header>
+
+      <label>
+        Usuario / correo
+        <input type="text" name="username" value={username} required autocomplete="username" autofocus />
+      </label>
+      <label>
+        Contraseña
+        <input type="password" name="password" required autocomplete="current-password" />
+      </label>
+
+      {error && <p class="error" role="alert">{error}</p>}
+
+      <button type="submit">Entrar</button>
+    </form>
+  </main>
+</Layout>
+
+<style>
+  main {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  header .logo {
+    display: block;
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    margin: 0 0 16px;
+    object-fit: cover;
+  }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text);
+  }
+  header p {
+    margin: 0;
+    color: var(--muted);
+  }
+  .error {
+    margin: 0;
+  }
+  button {
+    width: 100%;
+  }
+</style>

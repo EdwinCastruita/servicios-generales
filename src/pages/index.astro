@@ -1,0 +1,295 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { createServiceTicket, OdooError } from '../lib/odoo';
+
+const { user, sessionId } = Astro.locals;
+
+const tiposServicio = [
+  'Mantenimiento eléctrico',
+  'Plomería',
+  'Limpieza',
+  'Carpintería',
+  'Pintura',
+  'Aire acondicionado',
+  'Mudanza / traslado de mobiliario',
+  'Otro',
+];
+
+// Prioridades de helpdesk.ticket: '0' baja, '1' media, '2' alta, '3' urgente
+const prioridades = { baja: '0', media: '1', alta: '2', urgente: '3' } as const;
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+// Nombre y correo siempre vienen de la sesión autenticada: no se piden ni
+// se aceptan del formulario (el usuario no puede editarlos).
+const solicitanteNombre = user.name;
+const solicitanteEmail = user.username.includes('@') ? user.username : '';
+
+let ticketId: number | null = null;
+let error = '';
+let values: Record<string, string> = { prioridad: 'media' };
+
+if (Astro.request.method === 'POST') {
+  const data = await Astro.request.formData();
+  values = Object.fromEntries(
+    [...data.entries()].map(([k, v]) => [k, String(v).trim()]),
+  );
+
+  const requeridos = ['area', 'tipo', 'ubicacion', 'descripcion'];
+  const faltantes = requeridos.filter((k) => !values[k]);
+
+  if (faltantes.length || !(values.prioridad in prioridades)) {
+    error = 'Por favor completa los campos obligatorios (*).';
+  } else {
+    const detalle = [
+      ['Solicitante', solicitanteNombre],
+      ['Correo', solicitanteEmail],
+      ['Teléfono / ext.', values.telefono],
+      ['Área / departamento', values.area],
+      ['Tipo de servicio', values.tipo],
+      ['Ubicación', values.ubicacion],
+    ]
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<li><strong>${k}:</strong> ${escapeHtml(v)}</li>`)
+      .join('');
+
+    const ticket = {
+      name: `${values.tipo} – ${values.ubicacion}`,
+      description: `<ul>${detalle}</ul><p>${escapeHtml(values.descripcion).replace(/\n/g, '<br>')}</p>`,
+      priority: prioridades[values.prioridad as keyof typeof prioridades],
+    };
+
+    try {
+      const result = await createServiceTicket(sessionId, ticket);
+      ticketId = result.id ?? null;
+      values = { prioridad: 'media' };
+    } catch (e) {
+      console.error('Crear ticket Odoo:', e);
+      if (e instanceof OdooError && e.sessionExpired) return Astro.redirect('/login?expired=1');
+      error = `No se pudo crear el ticket en Odoo: ${e instanceof Error ? e.message : 'error desconocido'}`;
+    }
+  }
+}
+---
+
+<Layout title="Solicitud de Servicios Generales">
+  <nav>
+    <div class="brand">
+      <img src="/wispi.jpeg" alt="Wispi" class="logo" />
+      <span>Conectado como <strong>{user.name}</strong></span>
+    </div>
+    <form method="POST" action="/logout">
+      <button type="submit" class="secondary small">Cerrar sesión</button>
+    </form>
+  </nav>
+
+  <main>
+    <form method="POST" class="card" id="form-servicios">
+      <header>
+        <img src="/wispi.jpeg" alt="Wispi" class="logo" />
+        <h1>Solicitud de Servicios Generales</h1>
+        <p>Completa el formulario para registrar tu solicitud.</p>
+      </header>
+
+      {ticketId && (
+        <div class="success" role="status">
+          ✅ Ticket <strong>#{ticketId}</strong> creado correctamente en Odoo.
+        </div>
+      )}
+
+      <fieldset>
+        <legend>Datos del solicitante</legend>
+        <div class="grid">
+          <label>
+            Nombre completo
+            <input type="text" value={solicitanteNombre} readonly disabled title="Se toma de tu cuenta de Odoo" />
+          </label>
+          <label>
+            Correo electrónico
+            <input type="email" value={solicitanteEmail} readonly disabled title="Se toma de tu cuenta de Odoo" />
+          </label>
+          <label>
+            Teléfono / extensión
+            <input type="tel" name="telefono" value={values.telefono} autocomplete="tel" />
+          </label>
+          <label>
+            Área / departamento *
+            <input type="text" name="area" value={values.area} required />
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Detalle del servicio</legend>
+        <div class="grid">
+          <label>
+            Tipo de servicio *
+            <select name="tipo" required>
+              <option value="" disabled selected={!values.tipo}>Selecciona una opción</option>
+              {tiposServicio.map((t) => <option value={t} selected={values.tipo === t}>{t}</option>)}
+            </select>
+          </label>
+          <label>
+            Ubicación *
+            <input type="text" name="ubicacion" value={values.ubicacion} placeholder="Edificio, piso, oficina" required />
+          </label>
+          <div class="field">
+            <span>Prioridad *</span>
+            <div class="radios">
+              {Object.keys(prioridades).map((p) => (
+                <label class="radio">
+                  <input type="radio" name="prioridad" value={p} checked={values.prioridad === p} required />
+                  {p[0].toUpperCase() + p.slice(1)}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <label>
+          Descripción del problema o solicitud *
+          <textarea name="descripcion" rows="5" required minlength="10">{values.descripcion}</textarea>
+        </label>
+      </fieldset>
+
+      {error && <p class="error" role="alert">{error}</p>}
+
+      <div class="actions">
+        <button type="reset" class="secondary">Limpiar</button>
+        <button type="submit" id="btn-enviar">Enviar solicitud</button>
+      </div>
+    </form>
+  </main>
+</Layout>
+
+<script>
+  // Evita envíos dobles mientras se crea el ticket
+  const form = document.getElementById('form-servicios') as HTMLFormElement;
+  const btn = document.getElementById('btn-enviar') as HTMLButtonElement;
+  form.addEventListener('submit', () => {
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+  });
+</script>
+
+<style>
+  nav {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 16px 16px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  nav .logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    object-fit: cover;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 16px 16px 32px;
+  }
+  header .logo {
+    display: block;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    margin: 0 0 14px;
+    object-fit: cover;
+  }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--text);
+  }
+  header p {
+    margin: 0 0 20px;
+    color: var(--muted);
+  }
+  fieldset {
+    border: none;
+    padding: 0;
+    margin: 0 0 24px;
+  }
+  legend {
+    font-weight: 700;
+    font-size: 1.05rem;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    width: 100%;
+    color: var(--text);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+  textarea {
+    resize: vertical;
+  }
+  input:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    background: var(--border, #e5e5e5);
+  }
+  .radios {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding-top: 8px;
+  }
+  .radio {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--text);
+  }
+  .error {
+    margin: 0 0 16px;
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+  button.small {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+  }
+  button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+  .success {
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: var(--success-bg);
+    color: var(--success-text);
+  }
+</style>

@@ -1,0 +1,152 @@
+---
+interface Props {
+  title: string;
+}
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/jpeg" href="/wispi.jpeg" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  /* Paleta de marca Wispi · Xcien (oscuro + dorado), misma identidad que
+     el Portal de Vendedores (portal-frontend). */
+  :root {
+    --bg: #0a0a0c;
+    --card: #16171c;
+    --text: #f5f5f6;
+    --muted: #9a9ea7;
+    --border: #2a2c33;
+    --input-bg: #1c1d23;
+
+    --gold-start: #f6d32d;
+    --gold-end: #e0a512;
+    --gold-text: #171206;
+
+    --primary: var(--gold-end);
+    --primary-hover: var(--gold-start);
+
+    --error: #f87171;
+    --error-bg: rgba(248, 113, 113, 0.1);
+    --success-bg: rgba(234, 179, 8, 0.12);
+    --success-text: #f3d242;
+  }
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background:
+      radial-gradient(900px circle at 85% -10%, rgba(240, 195, 30, 0.12), transparent 60%),
+      radial-gradient(700px circle at -10% 110%, rgba(240, 195, 30, 0.06), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .card {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 20px 60px rgb(0 0 0 / 0.45);
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--gold-start), var(--gold-end), transparent);
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  input:not([type='radio']):not([type='checkbox']),
+  select,
+  textarea {
+    font: inherit;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--text);
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 14px;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: #6b7280;
+  }
+  input:not([type='radio']):not([type='checkbox']):focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    border-color: var(--gold-end);
+    box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.25);
+  }
+  input[type='radio'],
+  input[type='checkbox'] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--gold-end);
+  }
+  button {
+    font: inherit;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: none;
+    border-radius: 999px;
+    padding: 12px 22px;
+    cursor: pointer;
+    background: linear-gradient(90deg, var(--gold-start), var(--gold-end));
+    color: var(--gold-text);
+    box-shadow: 0 8px 24px rgba(234, 179, 8, 0.22);
+    transition: filter 0.15s ease, box-shadow 0.15s ease;
+  }
+  button:hover {
+    filter: brightness(1.06);
+    box-shadow: 0 10px 28px rgba(234, 179, 8, 0.32);
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    box-shadow: none;
+  }
+  button.secondary:hover {
+    filter: none;
+    border-color: var(--muted);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .error {
+    color: var(--error);
+    background: var(--error-bg);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+  }
+</style>
