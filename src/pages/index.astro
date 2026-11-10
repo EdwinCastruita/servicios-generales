@@ -1,6 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import { createServiceTicket, OdooError } from '../lib/odoo';
+import { createServiceTicket, OdooError, type TicketAttachment } from '../lib/odoo';
 
 const { user, sessionId } = Astro.locals;
 
@@ -18,8 +18,26 @@ const tiposServicio = [
 // Prioridades de helpdesk.ticket: '0' baja, '1' media, '2' alta, '3' urgente
 const prioridades = { baja: '0', media: '1', alta: '2', urgente: '3' } as const;
 
+// El navegador ya comprime/redimensiona las fotos antes de enviarlas
+// (ver <script> al final), así que estos límites son solo una
+// salvaguarda del lado del servidor.
+const MAX_IMAGENES = 5;
+const MAX_BYTES_POR_IMAGEN = 6 * 1024 * 1024; // 6 MB
+
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/** A base64 sin depender de `Buffer` (evita @types/node; funciona igual
+ * en runtime Node como Edge). */
+function arrayBufferABase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
 
 // Nombre y correo siempre vienen de la sesión autenticada: no se piden ni
 // se aceptan del formulario (el usuario no puede editarlos).
@@ -33,14 +51,24 @@ let values: Record<string, string> = { prioridad: 'media' };
 if (Astro.request.method === 'POST') {
   const data = await Astro.request.formData();
   values = Object.fromEntries(
-    [...data.entries()].map(([k, v]) => [k, String(v).trim()]),
+    [...data.entries()]
+      .filter((entry): entry is [string, FormDataEntryValue] => !(entry[1] instanceof File))
+      .map(([k, v]) => [k, String(v).trim()]),
   );
+
+  const imagenes = data
+    .getAll('imagenes')
+    .filter((v): v is File => v instanceof File && v.size > 0);
 
   const requeridos = ['area', 'tipo', 'ubicacion', 'descripcion'];
   const faltantes = requeridos.filter((k) => !values[k]);
 
   if (faltantes.length || !(values.prioridad in prioridades)) {
     error = 'Por favor completa los campos obligatorios (*).';
+  } else if (imagenes.length > MAX_IMAGENES) {
+    error = `Puedes adjuntar máximo ${MAX_IMAGENES} imágenes.`;
+  } else if (imagenes.some((f) => f.size > MAX_BYTES_POR_IMAGEN)) {
+    error = `Cada imagen debe pesar menos de ${Math.floor(MAX_BYTES_POR_IMAGEN / (1024 * 1024))} MB.`;
   } else {
     const detalle = [
       ['Solicitante', solicitanteNombre],
@@ -54,10 +82,24 @@ if (Astro.request.method === 'POST') {
       .map(([k, v]) => `<li><strong>${k}:</strong> ${escapeHtml(v)}</li>`)
       .join('');
 
+    let attachments: TicketAttachment[] = [];
+    try {
+      attachments = await Promise.all(
+        imagenes.map(async (file) => ({
+          name: file.name || 'imagen.jpg',
+          mimetype: file.type || 'image/jpeg',
+          data: arrayBufferABase64(await file.arrayBuffer()),
+        })),
+      );
+    } catch (e) {
+      console.error('Procesar imágenes adjuntas:', e);
+    }
+
     const ticket = {
       name: `${values.tipo} – ${values.ubicacion}`,
       description: `<ul>${detalle}</ul><p>${escapeHtml(values.descripcion).replace(/\n/g, '<br>')}</p>`,
       priority: prioridades[values.prioridad as keyof typeof prioridades],
+      attachments,
     };
 
     try {
@@ -85,7 +127,7 @@ if (Astro.request.method === 'POST') {
   </nav>
 
   <main>
-    <form method="POST" class="card" id="form-servicios">
+    <form method="POST" enctype="multipart/form-data" class="card" id="form-servicios">
       <header>
         <img src="/wispi.jpeg" alt="Wispi" class="logo" />
         <h1>Solicitud de Servicios Generales</h1>
@@ -150,6 +192,22 @@ if (Astro.request.method === 'POST') {
           Descripción del problema o solicitud *
           <textarea name="descripcion" rows="5" required minlength="10">{values.descripcion}</textarea>
         </label>
+
+        <div class="field">
+          <span>Fotos del problema (opcional, máx. {MAX_IMAGENES})</span>
+          <label class="dropzone" for="input-imagenes" id="dropzone">
+            <span id="dropzone-texto">Toca para elegir o tomar fotos</span>
+          </label>
+          <input
+            type="file"
+            id="input-imagenes"
+            name="imagenes"
+            accept="image/*"
+            multiple
+          />
+          <div class="previews" id="previews"></div>
+          <p class="hint" id="imagenes-hint"></p>
+        </div>
       </fieldset>
 
       {error && <p class="error" role="alert">{error}</p>}
@@ -161,6 +219,151 @@ if (Astro.request.method === 'POST') {
     </form>
   </main>
 </Layout>
+
+<script>
+  // Manejo de las fotos adjuntas: se redimensionan/comprimen en el
+  // propio navegador (canvas) antes de enviarlas, para no depender del
+  // peso original de la foto (las de celular pueden pesar varios MB) y
+  // mantener la petición dentro de los límites del hosting.
+  const MAX_IMAGENES = 5;
+  const MAX_DIMENSION = 1600; // px, lado más largo
+  const CALIDAD_JPEG = 0.75;
+
+  const input = document.getElementById('input-imagenes') as HTMLInputElement;
+  const previews = document.getElementById('previews') as HTMLDivElement;
+  const hint = document.getElementById('imagenes-hint') as HTMLParagraphElement;
+  const dropzone = document.getElementById('dropzone') as HTMLLabelElement;
+  const dropzoneTexto = document.getElementById('dropzone-texto') as HTMLSpanElement;
+
+  let seleccionadas: File[] = [];
+
+  function sincronizarInput() {
+    const dt = new DataTransfer();
+    seleccionadas.forEach((f) => dt.items.add(f));
+    input.files = dt.files;
+  }
+
+  function renderPreviews() {
+    previews.innerHTML = '';
+    seleccionadas.forEach((file, i) => {
+      const url = URL.createObjectURL(file);
+      const item = document.createElement('div');
+      item.className = 'preview-item';
+
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = file.name;
+      img.onload = () => URL.revokeObjectURL(url);
+
+      const quitar = document.createElement('button');
+      quitar.type = 'button';
+      quitar.className = 'quitar';
+      quitar.setAttribute('aria-label', 'Quitar imagen');
+      quitar.textContent = '×';
+      quitar.addEventListener('click', () => {
+        seleccionadas.splice(i, 1);
+        sincronizarInput();
+        renderPreviews();
+      });
+
+      item.append(img, quitar);
+      previews.appendChild(item);
+    });
+
+    if (seleccionadas.length) {
+      const totalKB = Math.round(seleccionadas.reduce((s, f) => s + f.size, 0) / 1024);
+      hint.textContent = `${seleccionadas.length} imagen(es) · ${totalKB} KB en total`;
+    } else {
+      hint.textContent = '';
+    }
+    dropzoneTexto.textContent =
+      seleccionadas.length >= MAX_IMAGENES
+        ? `Máximo de ${MAX_IMAGENES} imágenes alcanzado`
+        : 'Toca para elegir o tomar fotos';
+  }
+
+  async function obtenerDimensiones(file: File): Promise<{ bitmap: ImageBitmap | HTMLImageElement; w: number; h: number }> {
+    if ('createImageBitmap' in window) {
+      try {
+        const bitmap = await createImageBitmap(file);
+        return { bitmap, w: bitmap.width, h: bitmap.height };
+      } catch {
+        // sigue al fallback con <img>
+      }
+    }
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      const url = URL.createObjectURL(file);
+      el.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(el);
+      };
+      el.onerror = reject;
+      el.src = url;
+    });
+    return { bitmap: img, w: img.naturalWidth, h: img.naturalHeight };
+  }
+
+  async function comprimirImagen(file: File): Promise<File> {
+    if (!file.type.startsWith('image/')) return file;
+    try {
+      const { bitmap, w, h } = await obtenerDimensiones(file);
+      const escala = Math.min(1, MAX_DIMENSION / Math.max(w, h));
+      const destW = Math.max(1, Math.round(w * escala));
+      const destH = Math.max(1, Math.round(h * escala));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = destW;
+      canvas.height = destH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return file;
+      ctx.drawImage(bitmap as CanvasImageSource, 0, 0, destW, destH);
+
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/jpeg', CALIDAD_JPEG),
+      );
+      if (!blob || blob.size >= file.size) return file; // si no mejora, se manda el original
+
+      const nombre = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+      return new File([blob], nombre, { type: 'image/jpeg' });
+    } catch {
+      return file; // si falla la compresión, se manda el original tal cual
+    }
+  }
+
+  async function agregarArchivos(archivos: File[]) {
+    const nuevas = archivos.filter((f) => f.type.startsWith('image/'));
+    const espacio = MAX_IMAGENES - seleccionadas.length;
+    if (espacio <= 0) {
+      hint.textContent = `Ya tienes el máximo de ${MAX_IMAGENES} imágenes.`;
+      return;
+    }
+    const aProcesar = nuevas.slice(0, espacio);
+    if (!aProcesar.length) return;
+
+    hint.textContent = 'Procesando imágenes…';
+    const comprimidas = await Promise.all(aProcesar.map((f) => comprimirImagen(f)));
+    seleccionadas = seleccionadas.concat(comprimidas);
+    sincronizarInput();
+    renderPreviews();
+  }
+
+  input.addEventListener('change', () => {
+    void agregarArchivos(Array.from(input.files ?? []));
+  });
+
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    const archivos = Array.from(e.dataTransfer?.files ?? []);
+    void agregarArchivos(archivos);
+  });
+</script>
 
 <script>
   // Evita envíos dobles mientras se crea el ticket
@@ -271,6 +474,78 @@ if (Astro.request.method === 'POST') {
   }
   .error {
     margin: 0 0 16px;
+  }
+  #input-imagenes {
+    /* Se abre vía el <label class="dropzone">; se oculta visualmente
+       pero se mantiene accesible por teclado/lectores de pantalla. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .dropzone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-height: 72px;
+    padding: 12px;
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone:hover,
+  .dropzone.dragover {
+    border-color: var(--text);
+    background: var(--border, #f3f3f3);
+  }
+  .previews {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .preview-item {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .preview-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .preview-item .quitar {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    line-height: 1;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  .hint {
+    margin: 8px 0 0;
+    font-size: 0.8rem;
+    color: var(--muted);
   }
   .actions {
     display: flex;

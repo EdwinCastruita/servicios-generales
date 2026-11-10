@@ -110,11 +110,19 @@ export async function logout(sessionId: string) {
   }).catch(() => {});
 }
 
+export interface TicketAttachment {
+  name: string;
+  mimetype: string;
+  /** Contenido en base64, sin el prefijo `data:image/...;base64,`. */
+  data: string;
+}
+
 export interface CreateTicketPayload {
   name: string;
   description: string;
   priority: string;
   team_id?: number;
+  attachments?: TicketAttachment[];
 }
 
 export interface CreateTicketResult extends ApiResponse {
